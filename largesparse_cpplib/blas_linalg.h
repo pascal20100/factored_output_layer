@@ -25,7 +25,7 @@
 // SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
 // TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
 // PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
-// LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+// LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TOR (INCLUDING
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
@@ -158,6 +158,8 @@ protected:
     PP< CpuStorage<T> > storage_;  // smartpointer to allocated memory
     
 public:
+
+    typedef T elem_t;  // element type
     
     inline T* data() const
     { return data_; }
@@ -178,7 +180,7 @@ public:
 
 
   //! constructor from existing already allocated memory chunk. Not managed by storage.
-    inline BVec(T* data, int length, int step, CpuStorage<T>* storage)
+    inline BVec(T* data, int length, int step, CpuStorage<T>* storage=0)
       :data_(data), length_(length), step_(step), storage_(storage)
   {}
 
@@ -389,6 +391,10 @@ protected:
     PP< CpuStorage<T> > storage_;  // smartpointer to allocated memory
 
 public:
+
+    typedef T elem_t;  // type of elements
+    typedef BVec<T> vec_t; // associated vector type (what's returned e.g. by row(i) and column(j) ) 
+    
     inline T* data() const { return data_; }
     inline const T* const_data() const { return data_; }
     inline int nrows() const { return nrows_; }
@@ -432,11 +438,18 @@ public:
        storage_(m.storage_)
   {}
 
-  //! View of a contiguous vector as a single column matrix
-  inline BMat(const BVec<T>& x)
+    //! View of a contiguous vector as a single column matrix or single row matrix
+    inline BMat(const BVec<T>& x, bool as_row=false)
       :data_(x.data()), nrows_(x.length()), ncols_(1), stride_(x.length()), storage_(x.storage_)
   {
-    assert( x.is_contiguous() );
+      if (!as_row)  // view it a sa single column matrix, must be contiguous
+          assert( x.is_contiguous() );
+      else // view it a sa single row matrix
+      {
+          nrows_ = 1;
+          ncols_ = x.length_;
+          stride_ = x.step_;
+      }      
   }
 
   //! Constructs a matrix view of a contiguous vector
@@ -816,6 +829,45 @@ template<class T, class Talpha>
 inline void operator*=(const BVec<T>& x, Talpha alpha)
 { blas_scal( T(alpha), x); }
 
+//! x += a
+template<class T, class Talpha>
+inline void operator+=(const BVec<T>& x, Talpha alpha)
+  {
+      T* x_data = x.data();
+      int n = x.length();
+      int step = x.step();
+      while(n--)
+      {
+          *x += alpha;
+          x += step;
+      }
+  } 
+
+//! x -= a
+template<class T, class Talpha>
+inline void operator-=(const BVec<T>& x, Talpha alpha)
+  {
+      operator+=(x, -alpha);
+  } 
+
+
+template<class T>
+inline void operator*=(const BVec<T>& x, const BVec<T>& y)
+{ 
+    T* x_data = x.data();
+    int x_step = x.step();
+    const T* y_data = y.const_data();
+    int y_step = y.step();
+    int n = x.length();
+    assert(y.length()==n);
+    while(n--)
+    {
+        *x_data *= *y_data;
+        x_data += x_step;
+        y_data += y_step;
+    }
+}
+
 template<class T, class Talpha>
 inline void operator/=(const BVec<T>& x, Talpha alpha)
 { blas_scal( 1/T(alpha), x); }
@@ -858,6 +910,20 @@ inline void operator/=(const BMat<T>& A, Talpha alpha)
   inline void blas_axpy(Talpha alpha, const BVec<T>& x, const BVec<T>& y)
   { blas_axpy( T(alpha), x, y); }
 
+//! x += a
+  template<class T>
+  inline void operator+=(const BVec<T>& x, const T& a)
+  {
+      T* x_data = x.data();
+      int n = x.length();
+      int step = x.step();
+      while(n--)
+      {
+          *x_data += a;
+          x_data += step;
+      }
+  } 
+
 //! x -= y
   template<class T>
   inline void operator-=(const BVec<T>& x, const BVec<T>& y)
@@ -896,6 +962,32 @@ inline void operator/=(const BMat<T>& A, Talpha alpha)
   inline void operator+=(const BMat<T>& X, const BMat<T>& Y)
   { blas_axpy( T(+1), Y, X); } 
 
+//! X += y (y considered a column vector)
+  template<class T>
+  inline void addColumnVector(const BMat<T>& X, const BVec<T>& y)
+  {
+      assert(y.length()==X.nrows());
+      int ncols = X.ncols();
+      for (int j=0; j<ncols; j++)
+          X.column(j) += y;
+  }
+
+//! X += y^T (y^T considered a row vector)
+  template<class T>
+  inline void addRowVector(const BMat<T>& X, const BVec<T>& y)
+  {
+      int ncols = X.ncols();
+      assert(y.length()==ncols);
+      for (int j=0; j<ncols; j++)
+          X.column(j) += y[j];
+  }
+
+//! X += y (same as addColumnVector)
+  template<class T>
+  inline void operator+=(const BMat<T>& X, const BVec<T>& y)
+  {
+      addColumnVector(X,y);
+  }
 
 
 
@@ -994,14 +1086,14 @@ inline void operator/=(const BMat<T>& A, Talpha alpha)
   inline void blas_gemm_TN(Talpha alpha, const BMat<T>& A, const BMat<T>& B, Tbeta beta, const BMat<T>& C)
   { blas_gemm_TN(T(alpha), A, B, T(beta), C); }
 
-  //! C = alpha A B' + beta C 
-  template<class T>
-  inline void blas_gemm_NT(T alpha, const BMat<T>& A, const BMat<T>& B, T beta, const BMat<T>& C)
-  {  
-      assert(A.nrows()==C.nrows() && B.nrows()==C.ncols() && A.ncols()==B.ncols());
+//! C = alpha A B' + beta C 
+template<class T>
+inline void blas_gemm_NT(T alpha, const BMat<T>& A, const BMat<T>& B, T beta, const BMat<T>& C)
+{  
+    assert(A.nrows()==C.nrows() && B.nrows()==C.ncols() && A.ncols()==B.ncols());
     blas_gemm('N', 'T', C.nrows(), C.ncols(), A.ncols(), 
               alpha, A.data(), A.stride(), B.data(), B.stride(), beta, C.data(), C.stride()); 
-  }
+}
 
   template<class T, class Talpha, class Tbeta>
   inline void blas_gemm_NT(Talpha alpha, const BMat<T>& A, const BMat<T>& B, Tbeta beta, const BMat<T>& C)
@@ -1030,12 +1122,29 @@ inline void operator/=(const BMat<T>& A, Talpha alpha)
     assert(A.nrows()==A.ncols() && A.ncols()==B.nrows() && B.nrows()==C.nrows() && B.ncols()==C.ncols());
     char leftside = 'L'; 
     blas_symm(leftside, uplo, C.nrows(), C.ncols(), 
+              alpha, A.data(), A.stride(), B.data(), B.stride(),
+              beta, C.data(), C.stride()); 
+  }
+
+template<class T, class Talpha, class Tbeta>
+inline void blas_symm(char uplo, Talpha alpha, const BMat<T>& A, const BMat<T>& B, Tbeta beta, const BMat<T>& C)
+  { blas_symm(uplo, T(alpha), A, B, T(beta), C); }
+
+  //! C = alpha B A + beta C 
+  //! A is a symmetric matrix, and we use only its lower part (if uplo='L') or upper part (if uplo='U')
+  template<class T>
+  inline void blas_symm_rightside(char uplo, T alpha, const BMat<T>& A, const BMat<T>& B, T beta, const BMat<T>& C)
+  { 
+    assert( uplo=='L' || uplo=='U' );
+    assert(A.nrows()==A.ncols() && A.nrows()==B.ncols() && B.nrows()==C.nrows() && B.ncols()==C.ncols());
+    char rightside = 'R'; 
+    blas_symm(rightside, uplo, C.nrows(), C.ncols(), 
               alpha, A.data(), A.stride(), B.data(), B.stride(), beta, C.data(), C.stride()); 
   }
 
-  template<class T, class Talpha, class Tbeta>
-  inline void blas_symm(char uplo, Talpha alpha, const BMat<T>& A, const BMat<T>& B, Tbeta beta, const BMat<T>& C)
-  { blas_symm(uplo, T(alpha), A, B, T(beta), C); }
+template<class T, class Talpha, class Tbeta>
+inline void blas_symm_rightside(char uplo, Talpha alpha, const BMat<T>& A, const BMat<T>& B, Tbeta beta, const BMat<T>& C)
+  { blas_symm_rightside(uplo, T(alpha), A, B, T(beta), C); }
 
 
   //! C = alpha A A' + beta C 
@@ -1089,8 +1198,9 @@ inline void operator/=(const BMat<T>& A, Talpha alpha)
   template<class T>
   inline void blas_syr2k_T(char uplo, T alpha, const BMat<T>& A, const BMat<T>& B, T beta, const BMat<T>& C)
   { 
-    assert( uplo=='L' || uplo=='U' );    
-    assert(C.nrows()==C.ncols() && A.nrows()==C.nrows() && B.nrows()==C.nrows() && A.ncols()==B.ncols()); 
+    assert( uplo=='L' || uplo=='U' );
+    int n = C.nrows();
+    assert(C.ncols()==n && A.ncols()==n && B.ncols()==n && A.nrows()==B.nrows()); 
     blas_syr2k(uplo, 'T', A.ncols(), A.nrows(), 
                alpha, A.data(), A.stride(), B.data(), B.stride(), beta, C.data(), C.stride() ); 
   }
@@ -1369,6 +1479,24 @@ T max(const BMat<T>& A)
           blas_scal(n, scales[k], Ak, 1); 
   } 
 
+  //!  B = A diag(x)  
+  template<class T>
+  inline void scale_columns(const BMat<T>& A, const BVec<T>& scales, const BMat<T>& B) 
+  { 
+      int nrows = A.nrows();
+      int ncols = A.ncols();      
+      assert(scales.length() == A.ncols());
+      T* Ak = A.data();
+      T* Bk = B.data();
+      for(int k=0; k<ncols; k++, Ak += A.stride(), Bk += B.stride() )       
+      {
+          T s = scales[k];
+          for (int i=0; i<nrows; i++)
+              Bk[i] = Ak[i]*s;
+      }
+  } 
+
+
   //!  A = diag(x) A  
   template<class T>
   inline void scale_rows(const BMat<T>& A, const BVec<T>& scales) 
@@ -1381,6 +1509,28 @@ T max(const BMat<T>& A)
   } 
 
 
+  //!  B = diag(x) A  
+  template<class T>
+  inline void scale_rows(const BMat<T>& A, const BVec<T>& scales, const BMat<T>& B) 
+  { 
+      int nrows = A.nrows();
+      int ncols = A.ncols();      
+      assert(scales.length() == nrows);    
+
+      T* Ak = A.data();
+      T* Bk = B.data();
+      int A_stride = A.stride();
+      int B_stride = B.stride();
+      for(int k=0; k<ncols; k++, Ak += A_stride, Bk += B_stride )       
+      {
+          for (int i=0; i<nrows; i++)
+              Bk[i] = Ak[i]*scales[i];
+      }
+  } 
+
+
+
+
   //!  C = A diag(x)  
   template<class T>
   inline void product_matrix_diagonal(const BMat<T>& A, const BVec<T>& x, const BMat<T>& C) 
@@ -1388,6 +1538,33 @@ T max(const BMat<T>& A)
     C << A;
     scale_columns(C,x);
   } 
+
+
+//! for each row of the matrix, computes the sum of its elements
+template<class T> 
+inline void sum_rowwise(const BMat<T>& A, const BVec<T>& x)
+{
+    int nrows = A.nrows();
+    int ncols = A.ncols();
+    assert(x.length()==nrows);
+    if (ncols==0)
+        return;
+
+    x << A.column(0);
+    for(int j=1; j<ncols; j++)
+        x += A.column(j);
+}
+
+//! for each column of the matrix A, computes the sum of its elements
+template<class T> 
+inline void sum_columnwise(const BMat<T>& A, const BVec<T>& x)
+{
+    // int nrows = A.nrows();
+    int ncols = A.ncols();
+    assert(x.length()==ncols);
+    for(int j=0; j<ncols; j++)
+        x[j] = sum(A.column(j));
+}
 
   //! Returns sum( A * B )  where * denotes elementwise product and sum is the sum over all elements.
   template<class T>
@@ -1717,6 +1894,253 @@ void lapackSVD(const BMat<num_t>& A, BMat<num_t>& U, BVec<num_t>& S, BMat<num_t>
         PLERROR("In lapackSVD, problem when calling sgesdd_ to perform computation, returned INFO = " << INFO);
     }
 }
+
+// --------------------------------------------------
+// Sherman-Morrison and Woodbury based low rank updates of inverse transposed
+
+
+// Performs rank one update to U^-T (inverse of U transposed) that corresponds to rank 1 update to U <- U + alpha u v^T
+// using Sherman-Morrison formula.
+template<typename Mat, typename Vec>
+void blas_rank_1_update_UinvT(const Mat& UinvT, typename Mat::elem_t alpha,
+                              const Vec& u, const Vec& v) 
+{
+    // d-dimensional vectors for intermediate computations
+    typedef typename Vec::elem_t elem_t;
+    static Vec u_tilde;  
+    static Vec v_tilde;  
+    
+    
+    int d = UinvT.nrows();
+    u_tilde.resize(d);
+    v_tilde.resize(d);
+
+    // u_tilde = UinvT^T u
+    blas_gemv('T', 1, UinvT, u, 0, u_tilde);
+    // v_tilde = UinvT v
+    blas_gemv('N', 1, UinvT, v, 0, v_tilde);
+    elem_t s = blas_dot(v, u_tilde);
+    elem_t alpha_tilde = -alpha/(1+alpha*s);
+    // UinvT = UinvT + alpha_tilde v_tilde u_tilde^T
+    blas_ger(alpha_tilde, v_tilde, u_tilde, UinvT); 
+}
+
+// Performs rank k update to U^-T (inverse of U transposed) that corresponds to rank k update to U <- U + alpha A B^T
+// where U is a d x d matrix,  A and B are d x k matrices and alpha is a scalar. 
+// This is done by calling k times rank-one updates
+template<typename Mat>
+void blas_rank_update_UinvT(const Mat& UinvT, typename Mat::elem_t alpha, const Mat& A, const Mat& B)  
+{
+    for (int k=0; k<A.ncols(); k++)
+        blas_rank_1_update_UinvT(UinvT, alpha, A.column(k), B.column(k));
+}
+
+// rankm_update_invT rank-m update to square matrix and corresponding update to its inverse.
+// Performs:
+// U <- U + alpha A B^T and correspondingly updates UinvT = U^-T
+// U is a d x d matrix, UinvT is its inverse transposed
+// A and B are d x k matrices.
+// inv_update_mode specifieds how to perform the invere update: 1: iterate Sherman-Morrison rank-1 updates; 2: use Woodbury identity; 3: recompute full inverse
+// All matrices must be in column major mode
+
+template<typename Mat>
+void rankm_update_U_and_UinvT_iter_v1(typename Mat::elem_t alpha, const Mat& A, const Mat& B, const Mat& U, const Mat& UinvT)  
+  
+{
+    // 7) U <- U + alpha A B^T
+    blas_gemm_NT(alpha, A, B, 1, U);
+
+    // 8) Corresponding update to UinvT
+    blas_rank_update_UinvT(UinvT, alpha, A, B);
+}
+
+
+// rank_update_invT rank-m update to square matrix and corresponding update to its inverse.
+// Performs:
+// U <- U + alpha A B^T and correspondingly updates UinvT = U^-T
+// U is a d x d matrix, UinvT is its inverse transposed
+// A and B are d x K matrices.
+// inv_update_mode specifieds how to perform the invere update: 1: iterate Sherman-Morrison rank-1 updates; 2: use Woodbury identity; 3: recompute full inverse
+// All matrices must be in column major mode
+
+// To be thoroughly checked
+// This version also has a special case treatment for the first iteration
+template<typename Mat>
+void rankm_update_U_and_UinvT_iter_v2(typename Mat::elem_t alpha, const Mat& A, const Mat& B, const Mat& U, const Mat& UinvT)
+{
+    typedef typename Mat::vec_t Vec;
+    typedef typename Mat::elem_t elem_t;
+
+    assert(A.nrows()==B.nrows() && A.ncols()==B.ncols());
+
+    // d-dimensional vectors for intermediate results
+    static Vec u;
+    static Vec v;
+
+    int d = U.nrows();
+    u.resize(d);
+    v.resize(d);
+
+    // 7) U <- U + alpha A B^T
+    blas_gemm_NT(alpha, A, B, 1, U);
+
+    // 8) Corresponding update to UinvT
+
+    for (int k=0; k<B.ncols(); k++)
+    {
+        Vec Bk = B.column(k);
+        blas_gemv('N', 1, UinvT, Bk, 0, u);
+
+        if (k==0)
+        {
+            elem_t Bk_v = blas_dot(Bk,Bk);          
+            elem_t scale = -alpha / (1+alpha*Bk_v);
+            blas_ger(scale, u, Bk, UinvT);
+        }
+        else
+        {
+            Vec Ak = A.column(k);          
+            blas_gemv('T', 1, UinvT, Ak, 0, v);
+            elem_t Bk_v = blas_dot(Bk, v);
+            elem_t scale = -alpha / (1+alpha*Bk_v);
+            blas_ger(scale, u, v, UinvT);
+        }
+    }
+}
+
+// rank-m update to square matrix and to its inverse transpose, using the Woodbury identity
+// Updates U and UinvT with the following U <- U + alpha A B^T  
+// Based on Woodubry identity (internally performs inverse of a m x m matrix )
+// B is a d x m matrix
+void OLD_BUGGY_rankm_update_U_and_UinvT_Woodbury(real alpha, const BMat<real>& A, const BMat<real>& B, const BMat<real>& U, const BMat<real>& UinvT)
+{
+    int d = B.nrows();
+    int m = B.ncols();
+
+    // if(m>d)
+    //    PLERROR("It makes no sense to update the inverse using Woodbury identity. It will be cheaper to compute the inverse of your updated U directly");
+
+
+    // 7) U <- U + alpha A B^T
+    blas_gemm_NT(alpha, A, B, 1, U);
+
+    // 8) Corresponding update to UinvT  ( V is B^T  U is A    A is U  ) 
+    // U^-T <- U^-T - U^-T B (1/alpha I + B^T U^-1 A)^-T A^T U^-T
+    // or alternatively: U^-T <- U^-T - U^-T B (A^T U^-T B + 1/alpha I)^-1 A^T U^-T
+    
+    // Compute Imm = ( B^T B + 1/alpha I )^-1
+    // Note TODO: we could (and probably should) compute and invert a symmetric Imm (using only its lower or upper part)
+    static BMat<real> Imm;
+    Imm.resize(m,m);
+    blas_gemm_TN(1, B, B, 0, Imm);
+    add_scalar_to_diagonal(1/alpha, Imm);
+    invertMatrix(Imm);    
+
+    // Compute B_Imm = B Imm   (a d x m matrix )
+    static BMat<real> B_Imm;
+    B_Imm.resize(d,m);
+    blas_gemm_NN(1, B, Imm, 0, B_Imm);
+
+    // Compute UinvT_B_Imm  (a d x m matrix )
+    static BMat<real> UinvT_B_Imm;
+    UinvT_B_Imm.resize(d,m);
+    blas_gemm_NN(1, UinvT, B_Imm, 0, UinvT_B_Imm);
+    
+    // Perform update UinvT <- UinvT - UinvT_B_Imm B^T
+    blas_gemm_NT(-1, UinvT_B_Imm, B, 1, UinvT);
+}
+
+
+
+// rank-m update to square matrix and to its inverse transpose, using the Woodbury identity
+// Updates U and UinvT with the following U <- U + alpha A B^T  
+// Based on Woodubry identity (internally performs inverse of a m x m matrix )
+// B is a d x m matrix
+// Note: last parameter Uinv_A can be passed to save some computations
+// (note that it is Uinv_A not UinvT_A) as it can be trivially available in some cases.
+// If not, call the version of that function without that
+// parameter (version further down), that will compte it.
+template<class Mat>
+void rankm_update_U_and_UinvT_Woodbury(typename Mat::elem_t alpha, const Mat& A, const Mat& B, const Mat& U, const Mat& UinvT, const Mat& optional_Uinv_A)
+{
+    int d = B.nrows();
+    int m = B.ncols();
+
+    // if(m>d)
+    //    PLERROR("It makes no sense to update the inverse using Woodbury identity. It will be cheaper to compute the inverse of your updated U directly");
+
+
+    // 7) U <- U + alpha A B^T
+    blas_gemm_NT(alpha, A, B, 1, U);
+
+    // 8) Corresponding update to UinvT  ( V is B^T  U is A    A is U  ) 
+    // U^-T <- U^-T - U^-T B (1/alpha I + B^T U^-1 A)^-T A^T U^-T
+    // or alternatively: U^-T <- U^-T - U^-T B (A^T U^-T B + 1/alpha I)^-1 A^T U^-T
+    // or alternatively: U^-T <- U^-T - U^-T B ( (U^-1 A)^T B + 1/alpha I)^-1 (U^-1 A)^T
+    //                   U^-T <- U^-T - U^-T B ( (Uinv_A)^T B + 1/alpha I)^-1 (Uinv_A)^T
+
+    // this was called with A=H_tilde=UH so that Uinv_A = U^-1 U H = H
+    
+    // Compute Uinv_A = U^-1 A is not provided
+    const Mat& Uinv_A = optional_Uinv_A;
+
+// Compute Imm = ( (Uinv_A)^T B + 1/alpha I )^-1
+    static Mat Imm;
+    Imm.resize(m,m);
+    blas_gemm_TN(1, Uinv_A, B, 0, Imm);
+    add_scalar_to_diagonal(1/alpha, Imm);
+    invertMatrix(Imm);    
+
+    // Compute B_Imm = B Imm   (a d x m matrix )
+    static Mat B_Imm;
+    B_Imm.resize(d,m);
+    blas_gemm_NN(1, B, Imm, 0, B_Imm);
+
+    // Compute UinvT_B_Imm  (a d x m matrix )
+    static Mat UinvT_B_Imm;
+    UinvT_B_Imm.resize(d,m);
+    blas_gemm_NN(1, UinvT, B_Imm, 0, UinvT_B_Imm);
+    
+    // Perform update UinvT <- UinvT - UinvT_B_Imm (Uinv_A)^T
+    blas_gemm_NT(-1, UinvT_B_Imm, Uinv_A, 1, UinvT);
+}
+
+template<class Mat>
+void rankm_update_U_and_UinvT_Woodbury(typename Mat::elem_t alpha, const Mat& A, const Mat& B, const Mat& U, const Mat& UinvT)
+// rank-m update to square matrix and to its inverse transpose, using the Woodbury identity
+// Updates U and UinvT with the following U <- U + alpha A B^T  
+// Based on Woodubry identity (internally performs inverse of a m x m matrix )
+// B is a d x m matrix
+// NOTE: If you can cheaply provide (U^-1 A) consider drectly calling the version of
+// this funciton that takes it (Uinv_A) as extra parameter
+// to avoid recomputing it (which the present call does).
+{    
+    static Mat Uinv_A;
+    Uinv_A.resize(UinvT.ncols(), A.ncols());
+    blas_gemm_TN(1, UinvT, A, 0, Uinv_A);
+    rankm_update_U_and_UinvT_Woodbury(alpha, A, B, U, UinvT, Uinv_A);
+}
+
+// rankm_update_U_and_UinvT_recompute rank-m update to square matrix and recomputes its inverse from scratch.
+// Performs:
+// U <- U + alpha A B^T and correspondingly updates UinvT = U^-T
+// U is a d x d matrix, UinvT is its inverse transposed
+// A and B are d x k matrices.
+// All matrices must be in column major mode
+
+template<class Mat>
+void rankm_update_U_and_UinvT_recompute(typename Mat::elem_t alpha, const Mat& A, const Mat& B, const Mat& U, const Mat& UinvT)  // how big should this be????
+{
+    // 7) U <- U + alpha A B^T
+    blas_gemm_NT(alpha, A, B, 1, U);
+
+    // 8) Corresponding update to UinvT
+    // We recompute the inverse of U from scratch
+    UinvT << U;
+    transpose_squaremat_inplace(UinvT);
+    invertMatrix(UinvT);
+}
+
 
 
 

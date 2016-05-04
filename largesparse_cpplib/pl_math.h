@@ -85,11 +85,15 @@ extern _plearn_nan_type plearn_nan;
 
 //! Quiet NaN (float pattern)
 //! Intel Compiler seems to have a bug when initializing a class' members with NAN.
-#if defined(NAN) && !defined(WIN32) && !defined(__INTEL_COMPILER)
-#define MISSING_VALUE NAN
-#else
-#define MISSING_VALUE (plearn_nan.d)
-#endif
+//#if defined(NAN) && !defined(WIN32) && !defined(__INTEL_COMPILER)
+//#define MISSING_VALUE NAN
+//#else
+//#define MISSING_VALUE (plearn_nan.d)
+//#endif
+
+// Problem representing MISSING_VALUE as NAN with GPUs we'll use instead
+#define MISSING_VALUE 999999999.999999999
+
 
 //! INFINITY is not defined under Windows, or its definition may produce a
 //! compilation warning when used. We instead use the STL numeric limits.

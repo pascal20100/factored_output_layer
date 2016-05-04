@@ -540,6 +540,29 @@ void rank_update_dense_mat_cksparse_mat(const BMat<T>& U,
 }
 
 
+// C_kj = (B_j)^T A_{Kindexes_kj}
+// A is a (d,D) matrix,
+// Kindexes is a (K,m) matrix of integer indexes that will reference columns of A
+// B is a (d,m) matrix,
+// C will be a (K,m) matrix.
+template<class T>
+void product_selectedColumnsT_dense(const BMat<T>& A, const BMat<int>& Kindexes, const BMat<T>& B, const BMat<T>& C)
+{
+    int n = Kindexes.nrows();
+    int m = B.ncols();
+    assert(C.nrows()==n && C.ncols()==m);
+    for(int j=0; j<m; j++)
+    {
+        BVec<T> B_j = B.column(j);
+        for(int k=0; k<n; k++)
+        {
+            C(k,j) = blas_dot(B_j, A.column( Kindexes(k,j) ) );
+        }
+    }
+        
+}
+
+
 } // end of namespace PLearn
 
 

@@ -167,6 +167,164 @@ public:
     }
 };
 
+/*
+class CudaStreamNode
+{
+public:
+    CudaStreamNode *next;
+    CudaStreamNode *prev;
+    CudaStream stream;
+    
+    CudaStreamNode()
+        :next(0),prev(0)
+    {
+                    check_cuda_error(cudaStreamCreate(&stream),
+                             "cudaCreateStreamCreate");
+    }
+
+    ~CudaStreamNode()
+    {
+                check_cuda_error(cudaStreamDestroy(stream),
+                                 "cudaStreamDestroy");                
+    }    
+};
+
+
+class CudaStreamPool
+{
+private:
+    CudaStreamNode* free_streams;
+    CudaStreamNode* allocated_streams;
+
+public:    
+    CudaStreamPool()
+        :free_streams(0), allocated_streams(0)
+    {}
+
+    CudaStreamNode* allocate()
+    {
+        CudaStreamNode* node = 0;
+        if (free_streams!=0) // get first node of free_streams
+        {
+            node = free_streams;
+
+            // remove first node from free_streams
+            free_streams = node->next;
+            if (free_streams!=0)
+                free_streams->prev = 0;
+        }
+        else // create new node 
+        {
+            node = new CudaStreamNode();                        
+        }
+        
+        // insert node as first node of allocated_streams
+        node->prev = 0;
+        node->next = allocated_streams;
+        if (allocated_streams!=0)
+            allocated_streams->prev = node;
+        allocated_streams = node;
+
+        return node;
+    }
+
+    void free(CudaStreamNode* node)
+    {
+        // remove node from the list it's in
+        if(node->prev!=0)
+            node->prev->next = node->next;
+        if(node->next!=0)
+            node->next->prev = node->prev;
+
+        // insert it as first node of free_streams
+        node->prev = 0;
+        node->next = free_streams;
+        if (free_streams!=0)
+            free_streams->prev = node;
+        free_streams = node;
+    }
+
+    ~CudaStreamPool()
+    {
+    }    
+}
+
+class CudaEvent
+{
+private:
+    static CudaEventPool event_pool;
+    CudaEventNode* node;
+
+public:
+
+    CudaEvent()
+    {
+        node = event_pool.allocate();
+    }
+
+    ~CudaEvent()
+    {
+        event_pool.free(node);
+    }
+    
+};
+    
+
+class CudaStream
+{
+private:
+    static CudaStreamPool stream_pool;
+
+    CudaStreamNode* node;
+
+public:
+
+    typedef CudaEvent event_t;
+    
+    CudaStream()
+    {
+        node = stream_pool.allocate();
+    }
+
+    void select()
+    {
+        check_status( cublasSetStream(handle(), node->stream) );
+    }
+
+    //! Records an event in the current stream. Scheduled to fire when the stream reaches it
+    void record(const event_t& event)
+    {
+        check_cuda_error(cudaEventRecord(event.node->event, node->stream), "cudaEventRecord");
+    }
+
+    // Schedules a wating for that specific event in the current stream
+    void wait(const event_t& event)
+    {
+        check_cuda_error(cudaStreamWaitEvent(node->stream, event.node->event, 0), "cudaStreamWaitEvent");
+    }
+
+    void synchronize()
+    {
+        cudaStreamSynchronize(node->stream);  
+    }
+    
+    ~CudaStream()
+    {
+        stream_pool.free(node);
+    }
+};
+
+
+
+class CublasPContext
+{
+    typedef CudaStream stream_t;
+    typedef CudaEvent event_t;    
+};
+
+*/
+
+
 
 
 class CudaEventArray
@@ -232,6 +390,7 @@ public:
     }
 };
 
+// static CudaStreamArray streams;
 
 class CublasInit
 {
@@ -239,11 +398,9 @@ private:
     cublasHandle_t handle_;
     
 public:
-
     
     CudaStreamArray streams;
-
-
+    
     inline cublasHandle_t handle() const
     {
         return handle_;
@@ -447,6 +604,7 @@ protected:
     PP< CudaStorage<T> > storage_;  // smartpointer to allocated memory
     
 public:
+    typedef T elem_t;    
     
     inline T* data() const
     { return data_; }
@@ -467,7 +625,7 @@ public:
 
 
   //! constructor from existing already allocated memory chunk. Not managed by storage.
-    inline CublasVec(T* data, int length, int step, CudaStorage<T>* storage)
+    inline CublasVec(T* data, int length, int step, CudaStorage<T>* storage=0)
       :data_(data), length_(length), step_(step), storage_(storage)
   {}
 
@@ -708,6 +866,9 @@ protected:
     PP< CudaStorage<T> > storage_;  // smartpointer to allocated memory
 
 public:
+    typedef T elem_t;    
+    typedef CublasVec<T> vec_t;        
+    
     inline T* data() const { return data_; }
     inline const T* const_data() const { return data_; }
     inline int nrows() const { return nrows_; }
@@ -751,14 +912,22 @@ public:
   inline CublasMat(const CublasMat<T>& m)
       :data_(m.data_), nrows_(m.nrows_), ncols_(m.ncols_), stride_(m.stride_),
        storage_(m.storage_)
-  {}
+    {}
 
-  //! View of a contiguous vector as a single column matrix
-  inline CublasMat(const CublasVec<T>& x)
-      :data_(x.data()), nrows_(x.length()), ncols_(1), storage_(x.storage_)
-  {
-    assert( x.is_contiguous() );
-  }
+    //! View of a contiguous vector as a single column matrix or single row matrix
+    inline CublasMat(const CublasVec<T>& x, bool as_row=false)
+        :data_(x.data()), nrows_(x.length()), ncols_(1), storage_(x.storage_)
+    {
+      if (!as_row)  // view it a sa single column matrix, must be contiguous
+          assert( x.is_contiguous() );
+      else // view it a sa single row matrix
+      {
+          nrows_ = 1;
+          ncols_ = x.length();
+          stride_ = x.step_;
+      }      
+      
+    }
 
   //! Constructs a matrix view of a contiguous vector
   inline CublasMat(const CublasVec<T>& x, int nrows, int ncols)
@@ -1622,6 +1791,20 @@ inline void blas_symm(char uplo, float alpha, const CublasMat<float>& A, const C
                                      &beta, C.data(), C.stride()) ); 
 }
 
+  //! C = alpha B A + beta C 
+  //! A is a symmetric matrix, and we use only its lower part (if uplo='L') or upper part (if uplo='U')
+inline void blas_symm_rightside(char uplo, float alpha, const CublasMat<float>& A, const CublasMat<float>& B, float beta, const CublasMat<float>& C)
+{ 
+    assert( uplo=='L' || uplo=='U' );
+    assert(A.nrows()==A.ncols() && A.nrows()==B.ncols() && B.nrows()==C.nrows() && B.ncols()==C.ncols());
+    cublas.setPointerModeHost();
+    cublasSideMode_t rightside = CUBLAS_SIDE_RIGHT;    
+    cublas.check_status( cublasSsymm(cublas.handle(), rightside, toCublasFillMode(uplo),
+                                     C.nrows(), C.ncols(), 
+                                     &alpha, A.data(), A.stride(), B.data(), B.stride(), 
+                                     &beta, C.data(), C.stride()) ); 
+}
+
 //! C = alpha A B + beta C 
 //! A is a symmetric matrix, and we use only its lower part (if uplo='L') or upper part (if uplo='U')
 inline void blas_symm(char uplo, double alpha, const CublasMat<double>& A, const CublasMat<double>& B, double beta, const CublasMat<double>& C)
@@ -1631,6 +1814,20 @@ inline void blas_symm(char uplo, double alpha, const CublasMat<double>& A, const
     cublas.setPointerModeHost();
     cublasSideMode_t leftside = CUBLAS_SIDE_LEFT;    
     cublas.check_status( cublasDsymm(cublas.handle(), leftside, toCublasFillMode(uplo), C.nrows(), C.ncols(), 
+                                     &alpha, A.data(), A.stride(), B.data(), B.stride(), 
+                                     &beta, C.data(), C.stride()) ); 
+}
+
+  //! C = alpha B A + beta C 
+  //! A is a symmetric matrix, and we use only its lower part (if uplo='L') or upper part (if uplo='U')
+inline void blas_symm_rightside(char uplo, double alpha, const CublasMat<double>& A, const CublasMat<double>& B, double beta, const CublasMat<double>& C)
+{ 
+    assert( uplo=='L' || uplo=='U' );
+    assert(A.nrows()==A.ncols() && A.nrows()==B.ncols() && B.nrows()==C.nrows() && B.ncols()==C.ncols());
+    cublas.setPointerModeHost();
+    cublasSideMode_t rightside = CUBLAS_SIDE_RIGHT;    
+    cublas.check_status( cublasDsymm(cublas.handle(), rightside, toCublasFillMode(uplo),
+                                     C.nrows(), C.ncols(), 
                                      &alpha, A.data(), A.stride(), B.data(), B.stride(), 
                                      &beta, C.data(), C.stride()) ); 
 }
@@ -1712,7 +1909,8 @@ inline void blas_syr2k(char uplo, double alpha, const CublasMat<double>& A, cons
 inline void blas_syr2k_T(char uplo, float alpha, const CublasMat<float>& A, const CublasMat<float>& B, float beta, const CublasMat<float>& C)
 { 
     assert( uplo=='L' || uplo=='U' );    
-    assert(C.nrows()==C.ncols() && A.nrows()==C.nrows() && B.nrows()==C.nrows() && A.ncols()==B.ncols()); 
+    int n = C.nrows();
+    assert(C.ncols()==n && A.ncols()==n && B.ncols()==n && A.nrows()==B.nrows()); 
     cublas.setPointerModeHost();
     cublas.check_status( cublasSsyr2k(cublas.handle(), toCublasFillMode(uplo), CUBLAS_OP_T, A.ncols(), A.nrows(), 
                                       &alpha, A.data(), A.stride(), B.data(), B.stride(), 
@@ -1724,7 +1922,8 @@ inline void blas_syr2k_T(char uplo, float alpha, const CublasMat<float>& A, cons
 inline void blas_syr2k_T(char uplo, double alpha, const CublasMat<double>& A, const CublasMat<double>& B, double beta, const CublasMat<double>& C)
 { 
     assert( uplo=='L' || uplo=='U' );    
-    assert(C.nrows()==C.ncols() && A.nrows()==C.nrows() && B.nrows()==C.nrows() && A.ncols()==B.ncols()); 
+    int n = C.nrows();
+    assert(C.ncols()==n && A.ncols()==n && B.ncols()==n && A.nrows()==B.nrows()); 
     cublas.setPointerModeHost();
     cublas.check_status( cublasDsyr2k(cublas.handle(), toCublasFillMode(uplo), CUBLAS_OP_T, A.ncols(), A.nrows(), 
                                       &alpha, A.data(), A.stride(), B.data(), B.stride(), 
@@ -1767,17 +1966,41 @@ void cublas_dgmm(cublasSideMode_t mode, const CublasMat<double>& A, const Cublas
 inline void scale_columns(const CublasMat<float>& A, const CublasVec<float>& scales) 
 {  cublas_dgmm(CUBLAS_SIDE_RIGHT, A, scales, A);  }
 
+//!  B = A diag(x)  
+inline void scale_columns(const CublasMat<float>& A, const CublasVec<float>& scales, const CublasMat<float>& B) 
+{  cublas_dgmm(CUBLAS_SIDE_RIGHT, A, scales, B);  }
+
 //!  A = A diag(x)  
 inline void scale_columns(const CublasMat<double>& A, const CublasVec<double>& scales) 
+{  cublas_dgmm(CUBLAS_SIDE_RIGHT, A, scales, A);  }
+
+//!  B = A diag(x)  
+inline void scale_columns(const CublasMat<double>& A, const CublasVec<double>& scales, const CublasMat<double>& B) 
 {  cublas_dgmm(CUBLAS_SIDE_RIGHT, A, scales, A);  }
 
 //!  A = diag(x) A  
 inline void scale_rows(const CublasMat<float>& A, const CublasVec<float>& scales) 
 {  cublas_dgmm(CUBLAS_SIDE_LEFT, A, scales, A);  }
 
+//!  B = diag(x) A  
+inline void scale_rows(const CublasMat<float>& A, const CublasVec<float>& scales, const CublasMat<float>& B) 
+{  cublas_dgmm(CUBLAS_SIDE_LEFT, A, scales, B);  }
+
 //!  A = diag(x) A  
 inline void scale_rows(const CublasMat<double>& A, const CublasVec<double>& scales) 
 {  cublas_dgmm(CUBLAS_SIDE_LEFT, A, scales, A);  }
+
+//!  B = diag(x) A  
+inline void scale_rows(const CublasMat<double>& A, const CublasVec<double>& scales, const CublasMat<double>& B) 
+{  cublas_dgmm(CUBLAS_SIDE_LEFT, A, scales, B);  }
+
+//! x *= y
+template<class T>
+inline void operator*=(const CublasVec<T>& x, const CublasVec<T>& y)
+{
+    CublasMat<T> X(x, true);
+    scale_columns(X,y);
+}
 
 
 /* OLD VERSION
@@ -1856,6 +2079,26 @@ void copy_upper_to_lower(const CublasMat<T>& A)
         A.column(i).subVec(i+1, n-(i+1)) << A.row(i).subVec(i+1, n-(i+1));
 }
 
+
+//! for each row of the matrix, computes the sum of its elements
+template<class T> 
+inline void sum_rowwise(const CublasMat<T>& A, const CublasVec<T>& x)
+{
+    CublasVec<T> ones = CublasVec<T>::ones(A.ncols());
+    blas_gemv('N', T(1), A, ones, (T)0, x);
+}
+
+
+//! for each column of the matrix, computes the sum of its elements
+template<class T> 
+inline void sum_columnwise(const CublasMat<T>& A, const CublasVec<T>& x)
+{
+    CublasVec<T> ones = CublasVec<T>::ones(A.nrows());
+    blas_gemv('T', T(1), A, ones, (T)0, x);
+}
+
+
+
 //! Returns sum( A * B )  where * denotes elementwise product and sum is the sum over all elements.
 template<class T>
 inline T sum_prod(const CublasMat<T>& A, const CublasMat<T>& B)
@@ -1889,6 +2132,21 @@ inline T sum(const CublasVec<T>& x)
     return sum(host_x);
     */
 }
+
+//! X += y (y considered a column vector)
+  template<class T>
+  inline void addColumnVector(const CublasMat<T>& X, const CublasVec<T>& y)
+  {
+      blas_ger((T)1, y, CublasVec<T>::ones(X.ncols()), X);
+  }
+
+//! X += y^T (y^T considered a row vector)
+  template<class T>
+  inline void addRowVector(const CublasMat<T>& X, const CublasVec<T>& y)
+  {
+      blas_ger((T)1, CublasVec<T>::ones(X.nrows()), y, X);
+  }
+
 
 template<class T>
 inline T trace(const CublasMat<T>& A)
@@ -1951,8 +2209,41 @@ inline void diff(const CublasMat<T>& A, const CublasMat<T>& B, const CublasMat<T
 }
 
 
-// Following implementations are currently very inefficient
+// TODO: Following implementations are currently extremely inefficient
 // CPU does all the computation and elements are accessed (copied from the device) one by one 
+
+  template<class T>
+  T min(const CublasMat<T>& A)
+  {    
+      T minval = A(0,0);
+      for(int j=0; j<A.ncols(); j++)
+      {
+          for(int i=0; i<A.nrows(); i++)
+          {
+              T a = A(i,j);
+              if (a<minval)
+                  minval = a;
+          }
+      }
+      return minval;
+  }
+
+  template<class T>
+  T max(const CublasMat<T>& A)
+  {    
+      T maxval = A(0,0);
+      for(int j=0; j<A.ncols(); j++)
+      {
+          for(int i=0; i<A.nrows(); i++)
+          {
+              T a = A(i,j);
+              if (a>maxval)
+                  maxval = a;
+          }
+      }
+      return maxval;
+  }
+
 
   template<class T>
   T max_abs(const CublasMat<T>& A)

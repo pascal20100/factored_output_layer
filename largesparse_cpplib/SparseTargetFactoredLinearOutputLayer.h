@@ -63,165 +63,6 @@ using namespace PLearn;
 
 namespace PLearn {
 
-
-// Performs rank one update to U^-T (inverse of U transposed) that corresponds to rank 1 update to U <- U + alpha u v^T
-// using Sherman-Morrison formula.
-void blas_rank_1_update_UinvT(const BMat<real>& UinvT, real alpha, const BVec<real>& u, const BVec<real>& v) 
-{
-    // d-dimensional vectors for intermediate computations
-    static BVec<real> u_tilde;  
-    static BVec<real> v_tilde;  
-
-    int d = UinvT.nrows();
-    u_tilde.resize(d);
-    v_tilde.resize(d);
-
-    // u_tilde = UinvT^T u
-    blas_gemv('T', 1, UinvT, u, 0, u_tilde);
-    // v_tilde = UinvT v
-    blas_gemv('N', 1, UinvT, v, 0, v_tilde);
-    real s = blas_dot(v, u_tilde);
-    real alpha_tilde = -alpha/(1+alpha*s);
-    // UinvT = UinvT + alpha_tilde v_tilde u_tilde^T
-    blas_ger(alpha_tilde, v_tilde, u_tilde, UinvT); 
-}
-
-// Performs rank k update to U^-T (inverse of U transposed) that corresponds to rank k update to U <- U + alpha A B^T
-// where U is a d x d matrix,  A and B are d x k matrices and alpha is a scalar. 
-// This is done by calling k times rank-one updates
-void blas_rank_update_UinvT(const BMat<real>& UinvT, real alpha, const BMat<real>& A, const BMat<real>& B)  
-{
-    for (int k=0; k<A.ncols(); k++)
-        blas_rank_1_update_UinvT(UinvT, alpha, A.column(k), B.column(k));
-}
-
-// rankm_update_invT rank-m update to square matrix and corresponding update to its inverse.
-// Performs:
-// U <- U + alpha A B^T and correspondingly updates UinvT = U^-T
-// U is a d x d matrix, UinvT is its inverse transposed
-// A and B are d x k matrices.
-// inv_update_mode specifieds how to perform the invere update: 1: iterate Sherman-Morrison rank-1 updates; 2: use Woodbury identity; 3: recompute full inverse
-// All matrices must be in column major mode
-
-void rankm_update_U_and_UinvT_iter_v1(real alpha, const BMat<real>& A, const BMat<real>& B, const BMat<real>& U, const BMat<real>& UinvT)  
-  
-{
-    // 7) U <- U + alpha A B^T
-    blas_gemm_NT(alpha, A, B, 1, U);
-
-    // 8) Corresponding update to UinvT
-    blas_rank_update_UinvT(UinvT, alpha, A, B);
-}
-
-
-// rank_update_invT rank-m update to square matrix and corresponding update to its inverse.
-// Performs:
-// U <- U + alpha A B^T and correspondingly updates UinvT = U^-T
-// U is a d x d matrix, UinvT is its inverse transposed
-// A and B are d x K matrices.
-// inv_update_mode specifieds how to perform the invere update: 1: iterate Sherman-Morrison rank-1 updates; 2: use Woodbury identity; 3: recompute full inverse
-// All matrices must be in column major mode
-
-// To be thoroughly checked
-// This version also has a special case treatment for the first iteration
-void rankm_update_U_and_UinvT_iter_v2(real alpha, const BMat<real>& A, const BMat<real>& B, const BMat<real>& U, const BMat<real>& UinvT)
-{
-    assert(A.nrows()==B.nrows() && A.ncols()==B.ncols());
-
-    // d-dimensional vectors for intermediate results
-    static BVec<real> u;
-    static BVec<real> v;
-
-    int d = U.nrows();
-    u.resize(d);
-    v.resize(d);
-
-    // 7) U <- U + alpha A B^T
-    blas_gemm_NT(alpha, A, B, 1, U);
-
-    // 8) Corresponding update to UinvT
-
-    for (int k=0; k<B.ncols(); k++)
-    {
-        BVec<real> Bk = B.column(k);
-        blas_gemv('N', 1, UinvT, Bk, 0, u);
-
-        if (k==0)
-        {
-            real Bk_v = blas_dot(Bk,Bk);          
-            real scale = -alpha / (1+alpha*Bk_v);
-            blas_ger(scale, u, Bk, UinvT);
-        }
-        else
-        {
-            BVec<real> Ak = A.column(k);          
-            blas_gemv('T', 1, UinvT, Ak, 0, v);
-            real Bk_v = blas_dot(Bk, v);
-            real scale = -alpha / (1+alpha*Bk_v);
-            blas_ger(scale, u, v, UinvT);
-        }
-    }
-}
-
-// rank-m update to square matrix and to its inverse transpose, using the Woodbury identity
-// Updates U and UinvT with the following U <- U + alpha A B^T  
-// Based on Woodubry identity (internally performs inverse of a m x m matrix )
-// B is a d x m matrix
-void rankm_update_U_and_UinvT_Woodbury(real alpha, const BMat<real>& A, const BMat<real>& B, const BMat<real>& U, const BMat<real>& UinvT)
-{
-    int d = B.nrows();
-    int m = B.ncols();
-
-    // if(m>d)
-    //    PLERROR("It makes no sense to update the inverse using Woodbury identity. It will be cheaper to compute the inverse of your updated U directly");
-
-
-    // 7) U <- U + alpha A B^T
-    blas_gemm_NT(alpha, A, B, 1, U);
-
-    // 8) Corresponding update to UinvT
-
-    // Compute Imm = ( B^T B + 1/alpha I )^-1
-    // Note TODO: we could (and probably should) compute and invert a symmetric Imm (using only its lower or upper part)
-    static BMat<real> Imm;
-    Imm.resize(m,m);
-    blas_gemm_TN(1, B, B, 0, Imm);
-    add_scalar_to_diagonal(1/alpha, Imm);
-    invertMatrix(Imm);    
-
-    // Compute B_Imm = B Imm   (a d x m matrix )
-    static BMat<real> B_Imm;
-    B_Imm.resize(d,m);
-    blas_gemm_NN(1, B, Imm, 0, B_Imm);
-
-    // Compute UinvT_B_Imm  (a d x m matrix )
-    static BMat<real> UinvT_B_Imm;
-    UinvT_B_Imm.resize(d,m);
-    blas_gemm_NN(1, UinvT, B_Imm, 0, UinvT_B_Imm);
-    
-    // Perform update UinvT <- UinvT - UinvT_B_Imm B^T
-    blas_gemm_NT(-1, UinvT_B_Imm, B, 1, UinvT);
-}
-
-// rankm_update_U_and_UinvT_recompute rank-m update to square matrix and recomputes its inverse from scratch.
-// Performs:
-// U <- U + alpha A B^T and correspondingly updates UinvT = U^-T
-// U is a d x d matrix, UinvT is its inverse transposed
-// A and B are d x k matrices.
-// All matrices must be in column major mode
-
-void rankm_update_U_and_UinvT_recompute(real alpha, const BMat<real>& A, const BMat<real>& B, const BMat<real>& U, const BMat<real>& UinvT)  // how big should this be????
-{
-    // 7) U <- U + alpha A B^T
-    blas_gemm_NT(alpha, A, B, 1, U);
-
-    // 8) Corresponding update to UinvT
-    // We recompute the inverse of U from scratch
-    UinvT << U;
-    transpose_squaremat_inplace(UinvT);
-    invertMatrix(UinvT);
-}
-
 class SparseTargetFactoredLinearOutputLayer: public SparseTargetLinearOutputLayer
 {
 public:
@@ -1032,7 +873,8 @@ void batch_fbpropupdate_using_Qtilde(const BMat<real>& H,        // d x m matrix
                 rankm_update_U_and_UinvT_iter_v2(-two_eta, H_tilde, H, U, UinvT);
                 break;
             case 4:
-                rankm_update_U_and_UinvT_Woodbury(-two_eta, H_tilde, H, U, UinvT);
+                // OLD_BUGGY_rankm_update_U_and_UinvT_Woodbury(-two_eta, H_tilde, H, U, UinvT);
+                rankm_update_U_and_UinvT_Woodbury(-two_eta, H_tilde, H, U, UinvT, H);
                 break;
             case 5:
                 rankm_update_U_and_UinvT_recompute(-two_eta, H_tilde, H, U, UinvT);
@@ -1200,7 +1042,8 @@ void batch_fbpropupdate_using_Q(const BMat<real>& H,        // d x m matrix of l
                 rankm_update_U_and_UinvT_iter_v2(-two_eta, H_tilde, H, U, UinvT);
                 break;
             case 4:
-                rankm_update_U_and_UinvT_Woodbury(-two_eta, H_tilde, H, U, UinvT);
+                // OLD_BUGGY_rankm_update_U_and_UinvT_Woodbury(-two_eta, H_tilde, H, U, UinvT);
+                rankm_update_U_and_UinvT_Woodbury(-two_eta, H_tilde, H, U, UinvT, H);
                 break;
             case 5:
                 rankm_update_U_and_UinvT_recompute(-two_eta, H_tilde, H, U, UinvT);

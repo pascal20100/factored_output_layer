@@ -1,3 +1,4 @@
+
 // -*- C++ -*-
 
 // CudaSparseTargetFactoredLinearOutputLayer.h
@@ -652,7 +653,7 @@ void scale_VT_rows(const CublasVec<real>& scales)
         // And
         // V <- V C^-1
         //   <- V ( I + beta u u^T )
-        //   <- V + beta (V u) u^-T
+        //   <- V + beta (V u) u^T
         // or equivalently 
         // VT <- VT + beta u (V u)^T
 
@@ -661,6 +662,7 @@ void scale_VT_rows(const CublasVec<real>& scales)
         //      <- U^-1 + beta (U^-1 u) u^T
         // Or equivalently
         // U^-T <- U^-T + beta u (U^-1 u)^T
+        //      <- U^-T + beta u ( u^T U^-T )
 
         real beta = -alpha / (1 + alpha);
 
@@ -967,7 +969,8 @@ void scale_VT_rows(const CublasVec<real>& scales)
     }
 
 
-
+// TODO: FIX THIS AND MOVE TO _linalg AS IT HAs BEEN DONE FOR THE CPU VERSION
+    // PLUS REFLECT ON WHAt TO DO WITH STREAM VERSION
 // rank-m update to square matrix and to its inverse transpose, using the Woodbury identity
 // Updates U and UinvT with the following U <- U + alpha A B^T  
 // Based on Woodbury identity (internally performs inverse of a m x m matrix )
@@ -1028,7 +1031,6 @@ void rankm_update_U_and_UinvT_recompute(real alpha, const CublasMat<real>& A, co
     transpose(U, UinvT);
     invertMatrix(UinvT, (invup_mode<0));
 }
-
 
 // stream_for_H_tilde is the stream in which we scheduled computatiojn of A and in which we will update U 
 void rankm_update_U_and_UinvT_Woodbury_streams(real alpha, const CublasMat<real>& A, const CublasMat<real>& B, const CublasMat<real>& U, const CublasMat<real>& UinvT, cudaStream_t stream_for_A_and_U)

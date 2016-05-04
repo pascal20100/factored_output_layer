@@ -44,7 +44,7 @@
 #define DEFAULT_MEMTYPE CUDA_HOST
 #endif
 
-#define DEFAULT_MEMTYPE CUDA_HOST
+// #define DEFAULT_MEMTYPE CUDA_HOST
 
 
 namespace PLearn {

@@ -480,7 +480,21 @@ void rank_update_dense_mat_cksparse_mat_using_gemmBatched(const CublasMat<T>& U,
 
 }
 
-
+//! Computes YTY = Y^T Y  with Y in column-K-sparse representation
+//! Y is conceptually a n x m matrix in column K-sparse representation. 
+//! So it is represented using two K x m matrices Y.values and Y.indexes.
+//! The resulting Y^T Y is a dense m x m matrix.
+//! Note that in column K-sparse representation, it is important that
+//! each column of Y_indexes is sorted in ascending order,
+//! (except for an optional terminal -1 indicating fewer than K positions are used).
+template<class T>
+void cksparse_square_mat(const CKSparseMat<T>& Y, const CublasMat<T>& YTY)
+{
+    static BMat<T> YTY_cpu;
+    YTY_cpu.resize(YTY.nrows(), YTY.ncols(), false);
+    cksparse_square_mat(Y, YTY_cpu);
+    YTY_cpu >> YTY;
+}
 
 /* Y <- A X
    A is a dense (m,n) matrix in column major format. 
@@ -492,15 +506,20 @@ void rank_update_dense_mat_cksparse_mat_using_gemmBatched(const CublasMat<T>& U,
 template<class T>
 void product_dense_mat_cksparse_mat(const CublasMat<T>& A,
                                     const CKSparseMat<T>& X,
-                                    const CublasMat<T>& Y)
+                                    const CublasMat<T>& Y,
+                                    bool using_gemmBatched=true)
 {
-  assert(Y.nrows()==A.nrows() && Y.ncols()==X.ncols());
-  assert(A.ncols() == X.nrows());
-
-  int l = X.ncols();
-  for (int j=0; j<l; j++)
-      product_dense_mat_ksparse_vec(A, X.column(j), Y.column(j));
-
+    if (using_gemmBatched) // use efficient gemmBatched version    
+        product_dense_mat_cksparse_mat_using_gemmBatched(A,X,Y);
+    else // naive sequential implementation
+    {
+        assert(Y.nrows()==A.nrows() && Y.ncols()==X.ncols());
+        assert(A.ncols() == X.nrows());
+        
+        int l = X.ncols();
+        for (int j=0; j<l; j++)
+            product_dense_mat_ksparse_vec(A, X.column(j), Y.column(j));
+    }
 }
 
 // Copies b to a 
@@ -644,23 +663,59 @@ void rank_update_dense_mat_cksparse_mat(const CublasMat<T>& U,
 
 
 
-// Naive IMPLEMNTATION NOT USING STREAMs
 template<class T>
 void rank_update_dense_mat_cksparse_mat(const CublasMat<T>& U,
                                         const CKSparseMat<T>& V, 
-                                        const CublasMat<T>& A)
+                                        const CublasMat<T>& A,
+                                        bool using_gemmBatched=true)
 {
     assert( A.nrows() == U.nrows() && A.ncols()==V.nrows() && U.ncols() == V.ncols() );
 
-  // loop over rank-one updates
-  int l = U.ncols();
-
-  for(int j=0; j<l; j++)
-    {
-      rank_one_update_dense_vec_ksparse_vec(U.column(j), V.column(j), A);
+    if (using_gemmBatched) // use efficient gemmBatched implementation
+        rank_update_dense_mat_cksparse_mat_using_gemmBatched(U, V, A);
+    else  // slow naive implementation
+    {        
+        // loop over rank-one updates
+        int l = U.ncols();
+        
+        for(int j=0; j<l; j++)
+        {
+            rank_one_update_dense_vec_ksparse_vec(U.column(j), V.column(j), A);
+        }
     }
 }
 
+
+
+// TODO: make efficient version that will use batched_gemm
+
+// C_kj = (B_j)^T A_{Kindexes_kj}
+// A is a (d,D) matrix,
+// Kindexes is a (K,m) matrix of integer indexes that will reference columns of A
+// B is a (d,m) matrix,
+// C will be a (K,m) matrix.
+template<class T>
+void product_selectedColumnsT_dense(const CublasMat<T>& A, const BMat<int>& Kindexes, const CublasMat<T>& B, const CublasMat<T>& C)
+{
+    int n = Kindexes.nrows();
+    int m = B.ncols();
+    assert(C.nrows()==n && C.ncols()==m);
+
+    int C_stride = C.stride();
+    T* C_kj_ptr = C.data();
+    int C_ptr_nextcol_offset = C.stride()-C.nrows();
+    
+    for(int j=0; j<m; j++)
+    {
+        CublasVec<T> B_j = B.column(j);
+        for(int k=0; k<n; k++, C_kj_ptr++)
+        {
+            blas_dot_ondevice(B_j, A.column( Kindexes(k,j) ), C_kj_ptr );
+        }
+        C_kj_ptr += C_ptr_nextcol_offset;
+    }
+        
+}
 
 
 
